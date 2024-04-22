@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -30,92 +29,90 @@ class MainViewModel(private val audioClassificationHelper: AudioClassificationHe
 
     private var job: Job? = null
 
-    private val settingFlow = MutableStateFlow<Setting?>(null)
-        .apply {
-            viewModelScope.launch {
-                collect {
-                    if (it == null) {
-                        return@collect
-                    }
-                    stopClassifier()
-                    audioClassificationHelper.currentModel = it.model
-                    audioClassificationHelper.currentDelegate = it.delegate
-                    audioClassificationHelper.overlap = it.overlap
-                    audioClassificationHelper.numOfResults = it.maxResults
-                    audioClassificationHelper.classificationThreshold = it.threshold
-                    audioClassificationHelper.numThreads = it.threadCount
-                    if (job?.isActive == false) {
-                        job?.cancel()
-                    }
-                    job = launch {
-                        audioClassificationHelper.initClassifier()
-                    }
+    private val setting = MutableStateFlow<Setting?>(null).apply {
+        viewModelScope.launch {
+            collect {
+                if (it == null) {
+                    return@collect
+                }
+                stopClassifier()
+
+                audioClassificationHelper.options.currentModel = it.model
+                audioClassificationHelper.options.delegate = it.delegate
+                audioClassificationHelper.options.overlapFactor = it.overlap
+                audioClassificationHelper.options.resultCount = it.resultCount
+                audioClassificationHelper.options.probabilityThreshold = it.threshold
+                audioClassificationHelper.options.threadCount = it.threadCount
+                audioClassificationHelper.setupInterpreter()
+                job = launch {
+                    audioClassificationHelper.startRecord()
                 }
             }
         }
-    private val probabilitiesFlow = audioClassificationHelper.probabilities.distinctUntilChanged()
-        .map {
-            it.fold(
-                onSuccess = { pair ->
-                    pair
-                },
-                onFailure = {
-                    Pair(emptyList(), 0L)
-                }
-            )
+    }
+    private val probabilities =
+        audioClassificationHelper.probabilities.distinctUntilChanged()
+
+    private val errorMessage = MutableStateFlow<Throwable?>(null).apply {
+        viewModelScope.launch {
+            audioClassificationHelper.error.collect {
+                emit(it)
+            }
         }
+    }
 
     val uiState: StateFlow<UiState> =
-        combine(settingFlow.filterNotNull(), probabilitiesFlow) { setting, probabilities ->
+        combine(
+            setting.filterNotNull(),
+            probabilities,
+            errorMessage
+        ) { setting, probabilities, throwable ->
             UiState(
                 classifications = probabilities.first,
                 setting = setting.copy(inferenceTime = probabilities.second),
+                errorMessage = throwable?.message
             )
         }.stateIn(
             viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState()
         )
 
     fun startAudioClassification() {
-        settingFlow.update { Setting() }
+        setting.update { Setting() }
     }
 
-    fun setTFLiteModel(model: AudioClassificationHelper.TFLiteModel) {
-        viewModelScope.launch {
-            settingFlow.update { it?.copy(model = model) }
-        }
+    fun setModel(model: AudioClassificationHelper.TFLiteModel) {
+        setting.update { it?.copy(model = model) }
     }
 
     fun setDelegate(delegate: AudioClassificationHelper.Delegate) {
-        viewModelScope.launch {
-            settingFlow.update { it?.copy(delegate = delegate) }
-        }
+        setting.update { it?.copy(delegate = delegate) }
     }
 
     fun setOverlap(value: Float) {
-        viewModelScope.launch {
-            settingFlow.update { it?.copy(overlap = value) }
-        }
+        setting.update { it?.copy(overlap = value) }
     }
 
     fun setMaxResults(max: Int) {
-        viewModelScope.launch {
-            settingFlow.update { it?.copy(maxResults = max) }
-        }
+        setting.update { it?.copy(resultCount = max) }
     }
 
     fun setThreshold(threshold: Float) {
-        viewModelScope.launch {
-            settingFlow.update { it?.copy(threshold = threshold) }
-        }
+        setting.update { it?.copy(threshold = threshold) }
     }
 
     fun setThreadCount(count: Int) {
-        viewModelScope.launch {
-            settingFlow.update { it?.copy(threadCount = count) }
-        }
+        setting.update { it?.copy(threadCount = count) }
+    }
+
+    /** Clear error message after it has been consumed*/
+    fun errorMessageShown() {
+        errorMessage.update { null }
     }
 
     fun stopClassifier() {
-        audioClassificationHelper.stopAudioClassification()
+        audioClassificationHelper.stop()
+        if (job?.isActive == true) {
+            job?.cancel()
+        }
     }
 }
