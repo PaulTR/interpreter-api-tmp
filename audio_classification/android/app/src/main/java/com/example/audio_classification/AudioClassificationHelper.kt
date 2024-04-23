@@ -197,6 +197,7 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
 
     private suspend fun startRecognition(labels: List<String>) {
         coroutineScope {
+            delay(recognitionPeriod)
             if (modelInputLength <= 0) {
                 Log.e(TAG, "Switches: Cannot start recognition because model is unavailable.")
                 return@coroutineScope
@@ -255,8 +256,6 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
                         categories, latestPredictionLatencyMs.toLong()
                     )
                 )
-
-                delay(recognitionPeriod)
             }
         }
     }
@@ -305,8 +304,6 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
             }
 
             while (isActive) {
-                delay(options.audioPullPeriod)
-
                 when (audioRecord?.read(audioBuffer, 0, audioBuffer.size)) {
                     AudioRecord.ERROR_INVALID_OPERATION -> {
                         Log.w(TAG, "AudioRecord.ERROR_INVALID_OPERATION")
@@ -332,8 +329,8 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
                             recordingBuffer, recordingOffset, 0, bufferSamples
                         )
                         recordingOffset = (recordingOffset + bufferSamples) % recordingBufferSamples
+                        delay(options.audioPullPeriod)
                     }
-
                 }
             }
         }
