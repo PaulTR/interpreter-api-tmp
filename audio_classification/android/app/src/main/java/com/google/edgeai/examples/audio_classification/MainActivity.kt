@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.example.audio_classification
+package com.google.edgeai.examples.audio_classification
 
 import android.content.pm.PackageManager
 import android.os.Bundle
