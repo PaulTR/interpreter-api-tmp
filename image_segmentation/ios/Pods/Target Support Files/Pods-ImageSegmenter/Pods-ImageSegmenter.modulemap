@@ -1,6 +1,0 @@
-framework module Pods_ImageSegmenter {
-  umbrella header "Pods-ImageSegmenter-umbrella.h"
-
-  export *
-  module * { export * }
-}
