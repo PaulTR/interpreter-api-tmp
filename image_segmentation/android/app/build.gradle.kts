@@ -77,10 +77,6 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.coil.compose)
 
-    implementation(libs.androidx.media3.exoplayer)
-    implementation(libs.media3.exoplayer.dash)
-    implementation(libs.media3.ui)
-
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
