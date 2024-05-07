@@ -79,13 +79,13 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
 
     private lateinit var labels: List<String>
 
-    private var halfAudioArray: FloatArray? = null
+    private var previousAudioArray: FloatArray? = null
 
     private var audioManager: AudioManager? = null
 
     /** Stop, cancel or reset all necessary variable*/
     fun stop() {
-        halfAudioArray = null
+        previousAudioArray = null
         job?.cancel()
         audioManager?.stopRecord()
         interpreter?.resetVariableTensors()
@@ -106,6 +106,31 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
             throw IOException("Failed to load TFLite model - ${e.message}")
         } catch (e: Exception) {
             throw Exception("Failed to create Interpreter - ${e.message}")
+        }
+    }
+
+    /*
+    * Starts sound classification, which triggers running on IO Thread
+    */
+    @SuppressLint("MissingPermission")
+    suspend fun startRecord() {
+        withContext(Dispatchers.IO) {
+            // Inspect input and output specs.
+            val inputShape = interpreter?.getInputTensor(0)?.shape() ?: return@withContext
+
+            /**
+             * YAMNET input: float32[15600]
+             * Speech Command input: float32[1,44032]
+             */
+            val modelInputLength =
+                inputShape[if (options.currentModel == TFLiteModel.YAMNET) 0 else 1]
+            audioManager = AudioManager(modelInputLength, options.overlapFactor)
+
+            previousAudioArray = FloatArray(0)
+            audioManager!!.record().collect {
+                val array = convertShortToFloat(it)
+                startRecognition(array)
+            }
         }
     }
 
@@ -133,24 +158,24 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
             }
             val outputBuffer = FloatBuffer.allocate(modelNumClasses)
             // Put audio data to buffer
-            if (halfAudioArray != null) {
-                inputBuffer.put(halfAudioArray)
-
-
-                // Case: overlap < 50%
-                if (audioArray.size < modelInputLength - halfAudioArray!!.size) {
-                    halfAudioArray = halfAudioArray?.plus(audioArray)
+            if (previousAudioArray != null) {
+                // Put previous audio array first
+                inputBuffer.put(previousAudioArray)
+                // Case: overlap > 50%
+                if (audioArray.size < modelInputLength - previousAudioArray!!.size) {
+                    previousAudioArray = previousAudioArray?.plus(audioArray)
                     return@coroutineScope
                 }
-                // Case: overlap > 50%
-                else if (audioArray.size > modelInputLength - halfAudioArray!!.size) {
-                    val range = IntRange(audioArray.size, audioArray.size - halfAudioArray!!.size)
-                    halfAudioArray = audioArray.sliceArray(range)
-                    inputBuffer.put(audioArray)
+                // Case: overlap < 50%
+                else if (audioArray.size > modelInputLength - previousAudioArray!!.size) {
+                    val range = IntRange(0, (modelInputLength * options.overlapFactor).toInt() - 1)
+                    previousAudioArray = audioArray.sliceArray(range)
+                    inputBuffer.put(previousAudioArray)
                 }
-                // Case: overlap = 50%
+                // Put the remaining missing data
                 else {
                     inputBuffer.put(audioArray)
+                    previousAudioArray = FloatArray(0)
                 }
             }
 
@@ -174,31 +199,6 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
             _probabilities.emit(
                 Pair(categories, inferenceTime)
             )
-        }
-    }
-
-    /*
-     * Starts sound classification, which triggers running on IO Thread
-     */
-    @SuppressLint("MissingPermission")
-    suspend fun startRecord() {
-        withContext(Dispatchers.IO) {
-            // Inspect input and output specs.
-            val inputShape = interpreter?.getInputTensor(0)?.shape() ?: return@withContext
-
-            /**
-             * YAMNET input: float32[15600]
-             * Speech Command input: float32[1,44032]
-             */
-            val modelInputLength =
-                inputShape[if (options.currentModel == TFLiteModel.YAMNET) 0 else 1]
-            audioManager = AudioManager(modelInputLength, options.overlapFactor)
-
-            halfAudioArray = FloatArray((modelInputLength * options.overlapFactor).toInt())
-            audioManager!!.record().collect {
-                val array = convertShortToFloat(it)
-                startRecognition(array)
-            }
         }
     }
 
