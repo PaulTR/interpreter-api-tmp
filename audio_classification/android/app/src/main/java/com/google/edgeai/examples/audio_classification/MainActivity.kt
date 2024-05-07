@@ -147,7 +147,11 @@ fun AudioClassificationScreen(
                     viewModel.setModel(it)
                 },
                 onDelegateSelected = {
-                    viewModel.setDelegate(it)
+                    if (it == AudioClassificationHelper.Delegate.NNAPI) {
+                        viewModel.throwError(IllegalArgumentException("Cannot use NNAPI"))
+                    } else {
+                        viewModel.setDelegate(it)
+                    }
                 },
                 onOverlapSelected = {
                     viewModel.setOverlap(it.removeSuffix("%").toFloat() / 100)
@@ -198,6 +202,9 @@ fun BottomSheet(
     val maxResults = uiState.setting.resultCount
     val threshold = uiState.setting.threshold
     val threadCount = uiState.setting.threadCount
+    val model = uiState.setting.model
+    val delegate = uiState.setting.delegate
+    val overlap = uiState.setting.overlap
     Column(modifier = modifier.padding(horizontal = 20.dp, vertical = 5.dp)) {
         Row {
             Text(modifier = Modifier.weight(0.5f), text = "Inference Time")
@@ -205,17 +212,20 @@ fun BottomSheet(
         }
         Spacer(modifier = Modifier.height(20.dp))
         ModelSelection(
+            model = model,
             onModelSelected = onModelSelected,
         )
         OptionMenu(label = "Delegate",
             options = AudioClassificationHelper.Delegate.entries.map { it.name }.toList(),
+            currentOption = delegate.name,
             onOptionSelected = {
                 onDelegateSelected(AudioClassificationHelper.Delegate.valueOf(it))
             })
         Spacer(modifier = Modifier.height(20.dp))
         OptionMenu(
             label = "Overlap",
-            options = listOf("25%", "50%", "75%", "100%"),
+            options = listOf("0%", "25%", "50%", "75%"),
+            currentOption = "${(overlap * 100).toInt()}%",
             onOptionSelected = onOverlapSelected
         )
 
@@ -280,8 +290,9 @@ fun ClassificationBody(uiState: UiState, modifier: Modifier = Modifier) {
             contentPadding = PaddingValues(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(uiState.classifications.size) { index ->
-                val category = uiState.classifications[index]
+            val categories = uiState.classifications
+            items(count = categories.size) { index ->
+                val category = categories[index]
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         modifier = Modifier.weight(0.4f),
@@ -312,12 +323,12 @@ fun ClassificationBody(uiState: UiState, modifier: Modifier = Modifier) {
 @Composable
 fun OptionMenu(
     label: String,
-    modifier: Modifier = Modifier,
     options: List<String>,
+    currentOption: String,
+    modifier: Modifier = Modifier,
     onOptionSelected: (option: String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    var option by remember { mutableStateOf(options.first()) }
     Row(
         modifier = modifier, verticalAlignment = Alignment.CenterVertically
     ) {
@@ -330,7 +341,7 @@ fun OptionMenu(
                     },
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = option, fontSize = 15.sp)
+                Text(text = currentOption, fontSize = 15.sp)
                 Spacer(modifier = Modifier.width(5.dp))
                 Icon(
                     imageVector = Icons.Default.ArrowDropDown,
@@ -343,8 +354,7 @@ fun OptionMenu(
                     DropdownMenuItem(text = {
                         Text(it, fontSize = 15.sp)
                     }, onClick = {
-                        option = it
-                        onOptionSelected(option)
+                        onOptionSelected(it)
                         expanded = false
                     })
                 }
@@ -356,11 +366,11 @@ fun OptionMenu(
 
 @Composable
 fun ModelSelection(
+    model: AudioClassificationHelper.TFLiteModel,
     modifier: Modifier = Modifier,
     onModelSelected: (AudioClassificationHelper.TFLiteModel) -> Unit,
 ) {
-    val radioOptions = AudioClassificationHelper.TFLiteModel.entries.map { it.name }.toList()
-    var selectedOption by remember { mutableStateOf(radioOptions.first()) }
+    val radioOptions = AudioClassificationHelper.TFLiteModel.entries
 
     Column(modifier = modifier) {
         radioOptions.forEach { option ->
@@ -369,14 +379,17 @@ fun ModelSelection(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(
-                    selected = (option == selectedOption),
+                    selected = (option == model),
                     onClick = {
-                        if (selectedOption == option) return@RadioButton
-                        onModelSelected(AudioClassificationHelper.TFLiteModel.valueOf(option))
-                        selectedOption = option
+                        if (option == model) return@RadioButton
+                        onModelSelected(option)
                     }, // Recommended for accessibility with screen readers
                 )
-                Text(modifier = Modifier.padding(start = 16.dp), text = option, fontSize = 15.sp)
+                Text(
+                    modifier = Modifier.padding(start = 16.dp),
+                    text = option.name,
+                    fontSize = 15.sp
+                )
             }
         }
     }

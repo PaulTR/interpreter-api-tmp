@@ -18,29 +18,24 @@ package com.google.edgeai.examples.audio_classification
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.support.common.FileUtil
+import org.tensorflow.lite.support.metadata.MetadataExtractor
 import java.io.BufferedReader
 import java.io.IOException
+import java.io.InputStream
 import java.io.InputStreamReader
+import java.nio.ByteBuffer
 import java.nio.FloatBuffer
-import kotlin.math.ceil
-import kotlin.math.sin
 
 /**
  * Performs classification on sound.
@@ -51,14 +46,6 @@ import kotlin.math.sin
  */
 class AudioClassificationHelper(private val context: Context, val options: Options = Options()) {
     class Options(
-        /** The required audio sample rate in Hz.  */
-        val sampleRate: Int = 44_100,
-        /** How many milliseconds to sleep between successive audio sample pulls.  */
-        val audioPullPeriod: Long = 50L,
-        /** Number of warm up runs to do after loading the TFLite model.  */
-        val warmupRuns: Int = 3,
-        /** Number of points in average to reduce noise. */
-        val pointsInAverage: Int = 10,
         /** Overlap factor of recognition period */
         var overlapFactor: Float = DEFAULT_OVERLAP,
         /** Probability value above which a class is labeled as active (i.e., detected) the display.  */
@@ -84,52 +71,23 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
         extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
 
-    val error: SharedFlow<Throwable?>
-        get() = _error
-    private val _error = MutableSharedFlow<Throwable?>()
-
-    /** Overlap factor of recognition period */
-    private var overlapFactor: Float
-        get() = options.overlapFactor
-        set(value) {
-            options.overlapFactor = value.also {
-                recognitionPeriod = (1000L * (1 - value)).toLong()
-            }
-        }
-
-    private var audioRecord: AudioRecord? = null
-
-    /** How many milliseconds between consecutive model inference calls.  */
-    private var recognitionPeriod = (1000L * (1 - overlapFactor)).toLong()
 
     /** The TFLite interpreter instance.  */
     private var interpreter: Interpreter? = null
 
-    /** Audio length (in # of PCM samples) required by the TFLite model.  */
-    private var modelInputLength = 0
-
-    /** Number of output classes of the TFLite model.  */
-    private var modelNumClasses = 0
-
-    /** Used to hold the real-time probabilities predicted by the model for the output classes.  */
-    private lateinit var predictionProbs: FloatArray
-
-    /** Latest prediction latency in milliseconds.  */
-    private var latestPredictionLatencyMs = 0f
-
-    private var recordingOffset = 0
-    private lateinit var recordingBuffer: ShortArray
-
-    /** Buffer that holds audio PCM sample that are fed to the TFLite model for inference.  */
-    private lateinit var inputBuffer: FloatBuffer
-
     private var job: Job? = null
+
+    private lateinit var labels: List<String>
+
+    private var halfAudioArray: FloatArray? = null
+
+    private var audioManager: AudioManager? = null
 
     /** Stop, cancel or reset all necessary variable*/
     fun stop() {
-        audioRecord?.stop()
-        audioRecord = null
+        halfAudioArray = null
         job?.cancel()
+        audioManager?.stopRecord()
         interpreter?.resetVariableTensors()
         interpreter?.close()
         interpreter = null
@@ -139,124 +97,83 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
         interpreter = try {
             val tfliteBuffer = FileUtil.loadMappedFile(context, options.currentModel.fileName)
             Log.i(TAG, "Done creating TFLite buffer from ${options.currentModel}")
+            labels = getModelMetadata(tfliteBuffer)
             Interpreter(tfliteBuffer, Interpreter.Options().apply {
                 numThreads = options.threadCount
-                //TODO: NNAPI crash on YAMNET model
                 useNNAPI = options.delegate == Delegate.NNAPI
             })
         } catch (e: IOException) {
-            _error.emit(Throwable(message = "Failed to load TFLite model - ${e.message}"))
-            return
-        } catch (e: IllegalArgumentException) {
-            _error.emit(Throwable("Failed to create Interpreter - ${e.message}"))
-            return
+            throw IOException("Failed to load TFLite model - ${e.message}")
+        } catch (e: Exception) {
+            throw Exception("Failed to create Interpreter - ${e.message}")
         }
+    }
 
+    private suspend fun startRecognition(audioArray: FloatArray) {
         // Inspect input and output specs.
         val inputShape = interpreter?.getInputTensor(0)?.shape() ?: return
+
         /**
          * YAMNET input: float32[15600]
          * Speech Command input: float32[1,44032]
          */
-        modelInputLength = inputShape[if (options.currentModel == TFLiteModel.YAMNET) 0 else 1]
+        val modelInputLength = inputShape[if (options.currentModel == TFLiteModel.YAMNET) 0 else 1]
 
         val outputShape = interpreter?.getOutputTensor(0)?.shape() ?: return
-        modelNumClasses = outputShape[1]
+        val modelNumClasses = outputShape[1]
         // Fill the array with NaNs initially.
-        predictionProbs = FloatArray(modelNumClasses) { Float.NaN }
+        val predictionProbs = FloatArray(modelNumClasses) { Float.NaN }
 
-        inputBuffer = FloatBuffer.allocate(modelInputLength)
+        val inputBuffer = FloatBuffer.allocate(modelInputLength)
 
-        generateDummyAudioInput(inputBuffer)
-        for (n in 0 until options.warmupRuns) {
-            val t0 = SystemClock.elapsedRealtimeNanos()
-
-            // Create input and output buffers.
-            val outputBuffer = FloatBuffer.allocate(modelNumClasses)
-            inputBuffer.rewind()
-            outputBuffer.rewind()
-            interpreter?.run(inputBuffer, outputBuffer)
-
-            Log.i(
-                TAG, "Switches: Done calling interpreter.run(): %s (%.6f ms)".format(
-                    outputBuffer.array().contentToString(),
-                    (SystemClock.elapsedRealtimeNanos() - t0) / NANOS_IN_MILLIS
-                )
-            )
-        }
-
-    }
-
-    private fun generateDummyAudioInput(inputBuffer: FloatBuffer) {
-        val twoPiTimesFreq = 2 * Math.PI.toFloat() * 1000f
-        for (i in 0 until modelInputLength) {
-            val x = i.toFloat() / (modelInputLength - 1)
-            inputBuffer.put(i, sin(twoPiTimesFreq * x.toDouble()).toFloat())
-        }
-    }
-
-    private suspend fun startRecognition(labels: List<String>) {
         coroutineScope {
-            delay(recognitionPeriod)
             if (modelInputLength <= 0) {
                 Log.e(TAG, "Switches: Cannot start recognition because model is unavailable.")
                 return@coroutineScope
             }
             val outputBuffer = FloatBuffer.allocate(modelNumClasses)
-            while (isActive) {
-                var samplesAreAllZero = true
+            // Put audio data to buffer
+            if (halfAudioArray != null) {
+                inputBuffer.put(halfAudioArray)
 
-                var j = (recordingOffset - modelInputLength) % modelInputLength
-                if (j < 0) {
-                    j += modelInputLength
+
+                // Case: overlap < 50%
+                if (audioArray.size < modelInputLength - halfAudioArray!!.size) {
+                    halfAudioArray = halfAudioArray?.plus(audioArray)
+                    return@coroutineScope
                 }
-
-                for (i in 0 until modelInputLength) {
-                    if (!isActive) {
-                        return@coroutineScope
-                    }
-
-                    val s = if (i >= options.pointsInAverage && j >= options.pointsInAverage) {
-                        ((j - options.pointsInAverage + 1)..j).map { recordingBuffer[it % modelInputLength] }
-                            .average()
-                    } else {
-                        recordingBuffer[j % modelInputLength]
-                    }
-                    j += 1
-
-                    if (samplesAreAllZero && s.toInt() != 0) {
-                        samplesAreAllZero = false
-                    }
-                    inputBuffer.put(i, s.toFloat())
+                // Case: overlap > 50%
+                else if (audioArray.size > modelInputLength - halfAudioArray!!.size) {
+                    val range = IntRange(audioArray.size, audioArray.size - halfAudioArray!!.size)
+                    halfAudioArray = audioArray.sliceArray(range)
+                    inputBuffer.put(audioArray)
                 }
-                if (samplesAreAllZero) {
-                    Log.w(TAG, "No audio input: All audio samples are zero!")
-                    continue
+                // Case: overlap = 50%
+                else {
+                    inputBuffer.put(audioArray)
                 }
-                val t0 = SystemClock.elapsedRealtimeNanos()
-                inputBuffer.rewind()
-                outputBuffer.rewind()
-                interpreter?.run(inputBuffer, outputBuffer)
-                latestPredictionLatencyMs =
-                    ((SystemClock.elapsedRealtimeNanos() - t0) / NANOS_IN_MILLIS).toFloat()
-                outputBuffer.rewind()
-                outputBuffer.get(predictionProbs) // Copy data to predictionProbs.
-
-                val probList = predictionProbs.map {
-                    /** Scores in range 0..1.0 for each of the output classes. */
-                    if (it < options.probabilityThreshold) 0f else it
-                }
-
-                val categories = labels.zip(probList).map {
-                    Category(label = it.first, score = it.second)
-                }.sortedByDescending { it.score }.take(options.resultCount)
-
-                _probabilities.emit(
-                    Pair(
-                        categories, latestPredictionLatencyMs.toLong()
-                    )
-                )
             }
+
+            val startTime = SystemClock.uptimeMillis()
+            inputBuffer.rewind()
+            outputBuffer.rewind()
+            interpreter?.run(inputBuffer, outputBuffer)
+
+            outputBuffer.rewind()
+            outputBuffer.get(predictionProbs) // Copy data to predictionProbs.
+
+            val probList = predictionProbs.map {
+                /** Scores in range 0..1.0 for each of the output classes. */
+                if (it < options.probabilityThreshold) 0f else it
+            }
+
+            val categories = labels.zip(probList).map {
+                Category(label = it.first, score = it.second)
+            }.sortedByDescending { it.score }.take(options.resultCount)
+            val inferenceTime = SystemClock.uptimeMillis() - startTime
+            _probabilities.emit(
+                Pair(categories, inferenceTime)
+            )
         }
     }
 
@@ -266,86 +183,76 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
     @SuppressLint("MissingPermission")
     suspend fun startRecord() {
         withContext(Dispatchers.IO) {
-            val labels = loadLabels(currentModel = options.currentModel)
-            var bufferSize = AudioRecord.getMinBufferSize(
-                options.sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-            )
-            if (bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
-                bufferSize = options.sampleRate * 2
-                Log.w(TAG, "bufferSize has error or bad value")
-            }
-            Log.i(TAG, "bufferSize = $bufferSize")
-            audioRecord = AudioRecord(
-                // including MIC, UNPROCESSED, and CAMCORDER.
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                options.sampleRate,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize
-            )
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord failed to initialize")
-                return@withContext
-            }
-            Log.i(TAG, "Successfully initialized AudioRecord")
-            val bufferSamples = bufferSize / 2
-            val audioBuffer = ShortArray(bufferSamples)
-            val recordingBufferSamples =
-                ceil(modelInputLength.toFloat() / bufferSamples.toDouble()).toInt() * bufferSamples
-            Log.i(TAG, "recordingBufferSamples = $recordingBufferSamples")
-            recordingOffset = 0
-            recordingBuffer = ShortArray(recordingBufferSamples)
-            audioRecord?.startRecording()
-            Log.i(TAG, "Successfully started AudioRecord recording")
+            // Inspect input and output specs.
+            val inputShape = interpreter?.getInputTensor(0)?.shape() ?: return@withContext
 
-            // Start recognition (model inference) coroutine.
-            job = launch {
-                startRecognition(labels = labels)
-            }
+            /**
+             * YAMNET input: float32[15600]
+             * Speech Command input: float32[1,44032]
+             */
+            val modelInputLength =
+                inputShape[if (options.currentModel == TFLiteModel.YAMNET) 0 else 1]
+            audioManager = AudioManager(modelInputLength, options.overlapFactor)
 
-            while (isActive) {
-                when (audioRecord?.read(audioBuffer, 0, audioBuffer.size)) {
-                    AudioRecord.ERROR_INVALID_OPERATION -> {
-                        Log.w(TAG, "AudioRecord.ERROR_INVALID_OPERATION")
-                    }
-
-                    AudioRecord.ERROR_BAD_VALUE -> {
-                        Log.w(TAG, "AudioRecord.ERROR_BAD_VALUE")
-                    }
-
-                    AudioRecord.ERROR_DEAD_OBJECT -> {
-                        Log.w(TAG, "AudioRecord.ERROR_DEAD_OBJECT")
-                    }
-
-                    AudioRecord.ERROR -> {
-                        Log.w(TAG, "AudioRecord.ERROR")
-                    }
-
-                    bufferSamples -> {
-                        // We apply locks here to avoid two separate threads (the recording and
-                        // recognition threads) reading and writing from the recordingBuffer at the same
-                        // time, which can cause the recognition thread to read garbled audio snippets.
-                        audioBuffer.copyInto(
-                            recordingBuffer, recordingOffset, 0, bufferSamples
-                        )
-                        recordingOffset = (recordingOffset + bufferSamples) % recordingBufferSamples
-                        delay(options.audioPullPeriod)
-                    }
-                }
+            halfAudioArray = FloatArray((modelInputLength * options.overlapFactor).toInt())
+            audioManager!!.record().collect {
+                val array = convertShortToFloat(it)
+                startRecognition(array)
             }
         }
+    }
+
+    /** Load metadata from model*/
+    private suspend fun getModelMetadata(tfliteBuffer: ByteBuffer): List<String> {
+        val metadataExtractor = MetadataExtractor(tfliteBuffer)
+        val labels = mutableListOf<String>()
+        if (metadataExtractor.hasMetadata()) {
+            val inputStream = metadataExtractor.getAssociatedFile(options.currentModel.labelFile)
+            labels.addAll(readFileInputStream(inputStream))
+            Log.i(
+                TAG, "Successfully loaded model metadata ${metadataExtractor.associatedFileNames}"
+            )
+        }
+        return labels
+    }
+
+    /** Retrieve Map<String, Int> from metadata file */
+    private suspend fun readFileInputStream(inputStream: InputStream): List<String> {
+        return withContext(Dispatchers.IO) {
+            val reader = BufferedReader(InputStreamReader(inputStream))
+
+            val list = mutableListOf<String>()
+            var index = 0
+            var line = ""
+            while (reader.readLine().also { if (it != null) line = it } != null) {
+                list.add(line)
+                index++
+            }
+
+            reader.close()
+            list
+        }
+    }
+
+    private fun convertShortToFloat(shortAudio: ShortArray): FloatArray {
+        val audioLength = shortAudio.size
+        val floatAudio = FloatArray(audioLength)
+
+        // Loop and convert each short value to float
+        for (i in 0 until audioLength) {
+            floatAudio[i] = shortAudio[i].toFloat() / Short.MAX_VALUE
+        }
+        return floatAudio
     }
 
     companion object {
         private const val TAG = "SoundClassifier"
 
-        /** Number of nanoseconds in a millisecond  */
-        private const val NANOS_IN_MILLIS = 1_000_000.toDouble()
         val DEFAULT_MODEL = TFLiteModel.YAMNET
         val DEFAULT_DELEGATE = Delegate.CPU
         const val DEFAULT_THREAD_COUNT = 2
         const val DEFAULT_RESULT_COUNT = 3
-        const val DEFAULT_OVERLAP = 0.8f
+        const val DEFAULT_OVERLAP = 0.75f
         const val DEFAULT_PROBABILITY_THRESHOLD = 0.3f
     }
 
@@ -357,30 +264,14 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
         /** Yamnet labels: https://github.com/tensorflow/models/blob/master/research/audioset/yamnet/yamnet_class_map.csv*/
         YAMNET(
             "yamnet.tflite",
-            "yamnet_label.txt",
+            "yamnet_label_list.txt",
         ),
 
         /** Speech command labels: https://www.tensorflow.org/lite/models/modify/model_maker/speech_recognition */
         SpeechCommand(
             "speech.tflite",
-            "speech_label.txt",
+            "probability_labels.txt",
         )
-    }
-
-    /** Retrieve labels from "labels.txt" file */
-    private fun loadLabels(currentModel: TFLiteModel): List<String> {
-        return try {
-            val reader =
-                BufferedReader(InputStreamReader(context.assets.open(currentModel.labelFile)))
-            val wordList = mutableListOf<String>()
-            reader.useLines { lines ->
-                wordList.addAll(lines.toList())
-            }
-            wordList
-        } catch (e: IOException) {
-            Log.e(TAG, "Failed to read model ${currentModel.labelFile}: ${e.message}")
-            emptyList()
-        }
     }
 }
 

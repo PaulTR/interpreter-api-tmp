@@ -26,7 +26,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -45,37 +44,38 @@ class MainViewModel(private val audioClassificationHelper: AudioClassificationHe
 
     private var job: Job? = null
 
+    private val errorMessage = MutableStateFlow<Throwable?>(null)
+
     private val setting = MutableStateFlow<Setting?>(null).apply {
         viewModelScope.launch {
             collect {
                 if (it == null) {
                     return@collect
                 }
-                stopClassifier()
-
-                audioClassificationHelper.options.currentModel = it.model
-                audioClassificationHelper.options.delegate = it.delegate
-                audioClassificationHelper.options.overlapFactor = it.overlap
-                audioClassificationHelper.options.resultCount = it.resultCount
-                audioClassificationHelper.options.probabilityThreshold = it.threshold
-                audioClassificationHelper.options.threadCount = it.threadCount
-                audioClassificationHelper.setupInterpreter()
-                job = launch {
-                    audioClassificationHelper.startRecord()
+                try {
+                    stopClassifier()
+                    audioClassificationHelper.options.currentModel = it.model
+                    audioClassificationHelper.options.delegate = it.delegate
+                    audioClassificationHelper.options.overlapFactor = it.overlap
+                    audioClassificationHelper.options.resultCount = it.resultCount
+                    audioClassificationHelper.options.probabilityThreshold = it.threshold
+                    audioClassificationHelper.options.threadCount = it.threadCount
+                    audioClassificationHelper.setupInterpreter()
+                    job = launch {
+                        audioClassificationHelper.startRecord()
+                    }
+                } catch (e: Exception) {
+                    errorMessage.emit(e)
                 }
             }
         }
     }
     private val probabilities =
-        audioClassificationHelper.probabilities.distinctUntilChanged()
-
-    private val errorMessage = MutableStateFlow<Throwable?>(null).apply {
-        viewModelScope.launch {
-            audioClassificationHelper.error.collect {
-                emit(it)
-            }
-        }
-    }
+        audioClassificationHelper.probabilities.stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5_000), Pair(
+                listOf(), 0L
+            )
+        )
 
     val uiState: StateFlow<UiState> =
         combine(
@@ -118,6 +118,10 @@ class MainViewModel(private val audioClassificationHelper: AudioClassificationHe
 
     fun setThreadCount(count: Int) {
         setting.update { it?.copy(threadCount = count) }
+    }
+
+    fun throwError(error: Throwable) {
+        errorMessage.update { error }
     }
 
     /** Clear error message after it has been consumed*/
