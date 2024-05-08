@@ -2,6 +2,7 @@ package com.google.edgeai.examples.image_segmentation
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import androidx.camera.core.ImageProxy
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -36,41 +37,44 @@ class MainViewModel(private val imageSegmentationHelper: ImageSegmentationHelper
 
     private var segmentJob: Job? = null
 
-    private val segmentationUiShareFlow = MutableStateFlow<Pair<ImageInfo?, Long>>(
+    private val segmentationUiShareFlow = MutableStateFlow<Pair<OverlayInfo?, Long>>(
         Pair(null, 0L)
     ).also { flow ->
         viewModelScope.launch {
-            imageSegmentationHelper.segmentation.filter { it.segmentation.masks.isNotEmpty() }.map {
-                val segmentation = it.segmentation
-                val maskTensor = segmentation.masks[0]
-                val maskArray = maskTensor.buffer.array()
-                val pixels = IntArray(maskArray.size)
+            imageSegmentationHelper.segmentation
+                .filter { it.segmentation.masks.isNotEmpty() }.map {
+                    val segmentation = it.segmentation
+                    val maskTensor = segmentation.masks[0]
+                    val maskArray = maskTensor.buffer.array()
+                    val pixels = IntArray(maskArray.size)
 
-                val colorLabels = segmentation.coloredLabels.mapIndexed { index, coloredLabel ->
-                    ColorLabel(
-                        index, coloredLabel.getlabel(), coloredLabel.argb
+                    val colorLabels = segmentation.coloredLabels.mapIndexed { index, coloredLabel ->
+                        ColorLabel(
+                            index, coloredLabel.getlabel(), coloredLabel.argb
+                        )
+                    }
+                    // Set color for pixels
+                    for (i in maskArray.indices) {
+                        val colorLabel = colorLabels[maskArray[i].toInt()]
+                        val color = colorLabel.getColor()
+                        pixels[i] = color
+                    }
+                    // Get image info
+                    val width = maskTensor.width
+                    val height = maskTensor.height
+                    val overlayInfo = OverlayInfo(
+                        pixels = pixels, width = width, height = height
                     )
-                }
-                // Set color for pixels
-                for (i in maskArray.indices) {
-                    val colorLabel = colorLabels[maskArray[i].toInt()]
-                    val color = colorLabel.getColor()
-                    pixels[i] = color
-                }
-                // Get image info
-                val width = maskTensor.width
-                val height = maskTensor.height
-                val imageInfo = ImageInfo(
-                    pixels = pixels, width = width, height = height
-                )
 
-                val inferenceTime = it.inferenceTime
-                Pair(imageInfo, inferenceTime)
-            }.collect {
-                flow.emit(it)
-            }
+                    val inferenceTime = it.inferenceTime
+                    Pair(overlayInfo, inferenceTime)
+                }.collect {
+                    flow.emit(it)
+                }
         }
     }
+
+    private val mediaUri = MutableStateFlow<Uri>(Uri.EMPTY)
 
     private val errorMessage = MutableStateFlow<Throwable?>(null).also {
         viewModelScope.launch {
@@ -79,11 +83,13 @@ class MainViewModel(private val imageSegmentationHelper: ImageSegmentationHelper
     }
 
     val uiState: StateFlow<UiState> = combine(
+        mediaUri,
         segmentationUiShareFlow,
         errorMessage,
-    ) { segmentationUiPair, error ->
+    ) { uri, segmentationUiPair, error ->
         UiState(
-            imageInfo = segmentationUiPair.first,
+            mediaUri = uri,
+            overlayInfo = segmentationUiPair.first,
             inferenceTime = segmentationUiPair.second,
             errorMessage = error?.message
         )
@@ -110,7 +116,7 @@ class MainViewModel(private val imageSegmentationHelper: ImageSegmentationHelper
      *  @param rotationDegrees to correct the rotationDegrees during segmentation
      */
     fun segment(bitmap: Bitmap, rotationDegrees: Int) {
-        viewModelScope.launch {
+        segmentJob = viewModelScope.launch {
             val argbBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
             imageSegmentationHelper.segment(argbBitmap, rotationDegrees)
         }
@@ -118,10 +124,18 @@ class MainViewModel(private val imageSegmentationHelper: ImageSegmentationHelper
 
     /** Stop current segmentation */
     fun stopSegment() {
-        segmentJob?.cancel()
         viewModelScope.launch {
+            segmentJob?.cancel()
             segmentationUiShareFlow.emit(Pair(null, 0L))
         }
+    }
+
+    /** Update display media uri*/
+    fun updateMediaUri(uri: Uri) {
+        if (uri != mediaUri.value || uri.toString().contains("video")) {
+            stopSegment()
+        }
+        mediaUri.update { uri }
     }
 
     /** Set Delegate for ImageSegmentationHelper(CPU/NNAPI)*/

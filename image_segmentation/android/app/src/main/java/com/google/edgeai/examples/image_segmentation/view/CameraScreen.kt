@@ -61,11 +61,12 @@ fun CameraScreen(
         }
     }
     Box(modifier) {
-        CameraPreview(onImageAnalyzed = { imageProxy ->
-            onImageAnalyzed(imageProxy)
-        })
-        if (uiState.imageInfo != null) {
-            SegmentationOverlay(modifier = Modifier.fillMaxSize(), imageInfo = uiState.imageInfo)
+        CameraPreview(
+            onImageAnalyzed = { imageProxy ->
+                onImageAnalyzed(imageProxy)
+            })
+        if (uiState.overlayInfo != null) {
+            SegmentationOverlay(modifier = Modifier.fillMaxSize(), overlayInfo = uiState.overlayInfo)
         }
     }
 
@@ -91,7 +92,7 @@ fun CameraPreview(
     AndroidView(modifier = modifier, factory = {
         val previewView = PreviewView(it).apply {
             layoutParams = LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
-            scaleType = PreviewView.ScaleType.FILL_CENTER
+            scaleType = PreviewView.ScaleType.FILL_START
         }
 
         val executor = Executors.newSingleThreadExecutor()

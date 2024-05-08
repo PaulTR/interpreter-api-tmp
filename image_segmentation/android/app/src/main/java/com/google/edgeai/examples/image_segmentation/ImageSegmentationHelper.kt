@@ -72,8 +72,12 @@ class ImageSegmentationHelper(private val context: Context) {
                 val rotation = -rotationDegrees / 90
                 val (_, h, w, _) = interpreter?.getOutputTensor(0)?.shape() ?: return@withContext
                 val imageProcessor =
-                    ImageProcessor.Builder().add(ResizeOp(h, w, ResizeOp.ResizeMethod.BILINEAR))
-                        .add(Rot90Op(rotation)).add(NormalizeOp(127.5f, 127.5f)).build()
+                    ImageProcessor
+                        .Builder()
+                        .add(ResizeOp(h, w, ResizeOp.ResizeMethod.BILINEAR))
+                        .add(Rot90Op(rotation))
+                        .add(NormalizeOp(127.5f, 127.5f))
+                        .build()
 
                 // Preprocess the image and convert it into a TensorImage for segmentation.
                 val tensorImage = imageProcessor.process(TensorImage.fromBitmap(bitmap))
@@ -102,8 +106,12 @@ class ImageSegmentationHelper(private val context: Context) {
         val mask = processImage(inferenceData)
 
         val imageProperties =
-            ImageProperties.builder().setWidth(inferenceData.width).setHeight(inferenceData.height)
-                .setColorSpaceType(ColorSpaceType.GRAYSCALE).build()
+            ImageProperties
+                .builder()
+                .setWidth(inferenceData.width)
+                .setHeight(inferenceData.height)
+                .setColorSpaceType(ColorSpaceType.GRAYSCALE)
+                .build()
         val maskImage = TensorImage()
         maskImage.load(mask, imageProperties)
         return SegmentationTflite(

@@ -1,16 +1,18 @@
 package com.google.edgeai.examples.image_segmentation
 
 import android.graphics.Color
+import android.net.Uri
 import androidx.compose.runtime.Immutable
 
 @Immutable
 class UiState(
-    val imageInfo: ImageInfo? = null,
+    val mediaUri: Uri = Uri.EMPTY,
+    val overlayInfo: OverlayInfo? = null,
     val inferenceTime: Long = 0L,
     val errorMessage: String? = null,
 )
 
-class ImageInfo(
+class OverlayInfo(
     val pixels: IntArray,
     val width: Int,
     val height: Int,
@@ -26,10 +28,7 @@ data class ColorLabel(
     fun getColor(): Int {
         // Use completely transparent for the background color.
         return if (id == 0) Color.TRANSPARENT else Color.argb(
-            128,
-            Color.red(rgbColor),
-            Color.green(rgbColor),
-            Color.blue(rgbColor)
+            128, Color.red(rgbColor), Color.green(rgbColor), Color.blue(rgbColor)
         )
     }
 }

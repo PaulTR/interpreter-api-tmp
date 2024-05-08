@@ -17,7 +17,6 @@
 package com.google.edgeai.examples.image_segmentation
 
 import android.graphics.Bitmap
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -69,7 +68,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.edgeai.examples.image_segmentation.view.CameraScreen
 import com.google.edgeai.examples.image_segmentation.view.GalleryScreen
 
-
 class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterialApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,14 +76,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             var tabState by remember { mutableStateOf(Tab.Camera) }
 
-            var mediaUriState: Uri by remember {
-                mutableStateOf(Uri.EMPTY)
-            }
             // Register ActivityResult handler
             val galleryLauncher =
                 rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-                    viewModel.stopSegment()
-                    mediaUriState = uri ?: Uri.EMPTY
+                    if (uri != null) {
+                        viewModel.updateMediaUri(uri)
+                    }
                 }
 
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -118,9 +114,9 @@ class MainActivity : ComponentActivity() {
                 }) {
                 Column {
                     Header()
-                    Content(uiState = uiState,
+                    Content(
+                        uiState = uiState,
                         tab = tabState,
-                        uri = mediaUriState.toString(),
                         onTabChanged = {
                             tabState = it
                             viewModel.stopSegment()
@@ -140,7 +136,6 @@ class MainActivity : ComponentActivity() {
     fun Content(
         uiState: UiState,
         tab: Tab,
-        uri: String,
         modifier: Modifier = Modifier,
         onTabChanged: (Tab) -> Unit,
         onImageProxyAnalyzed: (ImageProxy) -> Unit,
@@ -168,7 +163,6 @@ class MainActivity : ComponentActivity() {
 
                 Tab.Gallery -> GalleryScreen(
                     modifier = Modifier.fillMaxSize(),
-                    uri = uri,
                     uiState = uiState,
                     onImageAnalyzed = {
                         onImageBitMapAnalyzed(it, 0)
@@ -236,8 +230,8 @@ class MainActivity : ComponentActivity() {
             Box {
                 Row(
                     modifier = Modifier.clickable {
-                            expanded = true
-                        }, verticalAlignment = Alignment.CenterVertically
+                        expanded = true
+                    }, verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(text = option, fontSize = 15.sp)
                     Spacer(modifier = Modifier.width(5.dp))

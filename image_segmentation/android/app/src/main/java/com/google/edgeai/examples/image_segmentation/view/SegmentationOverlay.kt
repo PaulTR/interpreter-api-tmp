@@ -5,10 +5,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
-import com.google.edgeai.examples.image_segmentation.ImageInfo
+import com.google.edgeai.examples.image_segmentation.OverlayInfo
 
 @Composable
-fun SegmentationOverlay(modifier: Modifier = Modifier, imageInfo: ImageInfo) {
+fun SegmentationOverlay(modifier: Modifier = Modifier, overlayInfo: OverlayInfo) {
     Canvas(
         modifier = modifier
     ) {
@@ -16,16 +16,12 @@ fun SegmentationOverlay(modifier: Modifier = Modifier, imageInfo: ImageInfo) {
         val imageWidth: Float = size.width
         val imageHeight: Float = size.height
 
-        // Create the mask bitmap with colors and the set of detected labels.
-        // We only need the first mask for this sample because we are using
-        // the OutputType CATEGORY_MASK, which only provides a single mask.
         val image = Bitmap.createBitmap(
-            imageInfo.pixels, imageInfo.width, imageInfo.height, Bitmap.Config.ARGB_8888
+            overlayInfo.pixels, overlayInfo.width, overlayInfo.height, Bitmap.Config.ARGB_8888
         )
 
         val scaleBitmap =
             Bitmap.createScaledBitmap(image, imageWidth.toInt(), imageHeight.toInt(), true)
         drawImage(scaleBitmap.asImageBitmap())
-
     }
 }

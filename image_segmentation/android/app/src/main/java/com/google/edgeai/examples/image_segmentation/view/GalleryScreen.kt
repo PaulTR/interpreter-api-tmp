@@ -23,11 +23,12 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun GalleryScreen(
-    uri: String, uiState: UiState, modifier: Modifier = Modifier, onImageAnalyzed: (Bitmap) -> Unit
+    uiState: UiState, modifier: Modifier = Modifier, onImageAnalyzed: (Bitmap) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val mediaType = getMediaType(context, Uri.parse(uri))
+    val uri = uiState.mediaUri
+    val mediaType = getMediaType(context, uri)
 
     DisposableEffect(uri) {
         var retriever: MediaMetadataRetriever? = null
@@ -36,7 +37,7 @@ fun GalleryScreen(
             retriever = MediaMetadataRetriever()
             job = scope.launch(Dispatchers.IO) {
                 // Load frames from the video.
-                retriever.setDataSource(context, Uri.parse(uri))
+                retriever.setDataSource(context, uri)
                 val videoLengthMs =
                     retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                         ?.toLong()
@@ -74,28 +75,29 @@ fun GalleryScreen(
     Box(modifier = modifier) {
         when (mediaType) {
             MediaType.IMAGE -> {
-                AsyncImage(modifier = Modifier.fillMaxSize(),
+                AsyncImage(
+                    modifier = Modifier.fillMaxSize(),
                     model = uri,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     onSuccess = {
                         val bimap = it.result.drawable.toBitmap()
                         onImageAnalyzed(bimap)
-                    })
+                    },
+                )
             }
 
             MediaType.VIDEO -> {
                 AndroidView(modifier = Modifier.fillMaxSize(), factory = { context ->
                     ScalableVideoView(context).apply {
                         setDisplayMode(ScalableVideoView.DisplayMode.ORIGINAL)
-                        setVideoURI(Uri.parse(uri))
+                        setVideoURI(uri)
                         setOnPreparedListener {
-
                             it.start()
                         }
                     }
                 }, update = {
-                    it.setVideoURI(Uri.parse(uri))
+                    it.setVideoURI(uri)
                     it.setOnPreparedListener { player ->
                         if (player.isPlaying) {
                             player.stop()
@@ -110,8 +112,11 @@ fun GalleryScreen(
             }
         }
 
-        if (uiState.imageInfo != null) {
-            SegmentationOverlay(modifier = Modifier.fillMaxSize(), imageInfo = uiState.imageInfo)
+        if (uiState.overlayInfo != null) {
+            SegmentationOverlay(
+                modifier = Modifier.fillMaxSize(),
+                overlayInfo = uiState.overlayInfo
+            )
         }
     }
 }
