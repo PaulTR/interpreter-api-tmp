@@ -84,6 +84,7 @@ class MainActivity : ComponentActivity() {
             // Register ActivityResult handler
             val galleryLauncher =
                 rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+                    viewModel.stopSegment()
                     mediaUriState = uri ?: Uri.EMPTY
                 }
 
