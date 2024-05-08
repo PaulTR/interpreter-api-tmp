@@ -10,7 +10,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 
-class AudioManager(private val sampleRate: Int, private val overlap: Float) {
+class AudioManager(
+    private val sampleRate: Int,
+    private val bufferSize: Int,
+    private val overlap: Float
+) {
     private var audioRecord: AudioRecord? = null
 
     companion object {
@@ -20,22 +24,22 @@ class AudioManager(private val sampleRate: Int, private val overlap: Float) {
     @SuppressLint("MissingPermission")
     suspend fun record(): Flow<ShortArray> {
         return flow {
-            val bufferSize = (sampleRate * (1 - overlap)).toInt()
-            Log.i(TAG, "bufferSize = $bufferSize")
+            val buffer = (bufferSize * (1 - overlap)).toInt()
+            Log.i(TAG, "bufferSize = $buffer")
             audioRecord = AudioRecord(
                 // including MIC, UNPROCESSED, and CAMCORDER.
                 MediaRecorder.AudioSource.VOICE_RECOGNITION,
                 sampleRate,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
-                bufferSize
+                buffer
             )
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
                 Log.e(TAG, "AudioRecord failed to initialize")
                 return@flow
             }
             Log.i(TAG, "Successfully initialized AudioRecord")
-            val audioBuffer = ShortArray(bufferSize)
+            val audioBuffer = ShortArray(buffer)
             audioRecord?.startRecording()
 
             while (currentCoroutineContext().isActive) {
@@ -60,7 +64,7 @@ class AudioManager(private val sampleRate: Int, private val overlap: Float) {
                         Log.w(TAG, "AudioRecord.ERROR")
                     }
 
-                    bufferSize -> {
+                    buffer -> {
                         Log.i(TAG, "record: $audioBuffer")
                         emit(audioBuffer)
                     }

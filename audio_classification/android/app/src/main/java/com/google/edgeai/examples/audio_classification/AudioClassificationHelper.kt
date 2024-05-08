@@ -124,7 +124,11 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
              */
             val modelInputLength =
                 inputShape[if (options.currentModel == TFLiteModel.YAMNET) 0 else 1]
-            audioManager = AudioManager(modelInputLength, options.overlapFactor)
+            audioManager = AudioManager(
+                options.currentModel.sampleRate,
+                modelInputLength,
+                options.overlapFactor
+            )
 
             previousAudioArray = FloatArray(0)
             audioManager!!.record().collect {
@@ -252,7 +256,7 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
         val DEFAULT_DELEGATE = Delegate.CPU
         const val DEFAULT_THREAD_COUNT = 2
         const val DEFAULT_RESULT_COUNT = 3
-        const val DEFAULT_OVERLAP = 0.75f
+        const val DEFAULT_OVERLAP = 0f
         const val DEFAULT_PROBABILITY_THRESHOLD = 0.3f
     }
 
@@ -260,17 +264,19 @@ class AudioClassificationHelper(private val context: Context, val options: Optio
         CPU, NNAPI
     }
 
-    enum class TFLiteModel(val fileName: String, val labelFile: String) {
+    enum class TFLiteModel(val fileName: String, val labelFile: String, val sampleRate: Int) {
         /** Yamnet labels: https://github.com/tensorflow/models/blob/master/research/audioset/yamnet/yamnet_class_map.csv*/
         YAMNET(
             "yamnet.tflite",
             "yamnet_label_list.txt",
+            16000
         ),
 
         /** Speech command labels: https://www.tensorflow.org/lite/models/modify/model_maker/speech_recognition */
         SpeechCommand(
             "speech.tflite",
             "probability_labels.txt",
+            44100
         )
     }
 }

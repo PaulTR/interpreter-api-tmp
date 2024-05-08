@@ -153,9 +153,6 @@ fun AudioClassificationScreen(
                         viewModel.setDelegate(it)
                     }
                 },
-                onOverlapSelected = {
-                    viewModel.setOverlap(it.removeSuffix("%").toFloat() / 100)
-                },
                 onMaxResultSet = {
                     viewModel.setMaxResults(it)
                 },
@@ -194,7 +191,6 @@ fun BottomSheet(
     modifier: Modifier = Modifier,
     onModelSelected: (AudioClassificationHelper.TFLiteModel) -> Unit,
     onDelegateSelected: (option: AudioClassificationHelper.Delegate) -> Unit,
-    onOverlapSelected: (option: String) -> Unit,
     onMaxResultSet: (value: Int) -> Unit,
     onThresholdSet: (value: Float) -> Unit,
     onThreadsCountSet: (value: Int) -> Unit,
@@ -204,7 +200,6 @@ fun BottomSheet(
     val threadCount = uiState.setting.threadCount
     val model = uiState.setting.model
     val delegate = uiState.setting.delegate
-    val overlap = uiState.setting.overlap
     Column(modifier = modifier.padding(horizontal = 20.dp, vertical = 5.dp)) {
         Row {
             Text(modifier = Modifier.weight(0.5f), text = "Inference Time")
@@ -222,12 +217,6 @@ fun BottomSheet(
                 onDelegateSelected(AudioClassificationHelper.Delegate.valueOf(it))
             })
         Spacer(modifier = Modifier.height(20.dp))
-        OptionMenu(
-            label = "Overlap",
-            options = listOf("0%", "25%", "50%", "75%"),
-            currentOption = "${(overlap * 100).toInt()}%",
-            onOptionSelected = onOverlapSelected
-        )
 
         Spacer(modifier = Modifier.height(10.dp))
 
