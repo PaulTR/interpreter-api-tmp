@@ -12,7 +12,6 @@ fun SegmentationOverlay(modifier: Modifier = Modifier, overlayInfo: OverlayInfo)
     Canvas(
         modifier = modifier
     ) {
-        val size = this.size
         val imageWidth: Float = size.width
         val imageHeight: Float = size.height
 
